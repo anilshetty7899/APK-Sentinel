@@ -10,6 +10,7 @@ DELETE /api/analyses/{id}     — Delete analysis
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Optional
 
@@ -18,7 +19,9 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.config import settings
 from app.models import Analysis, AnalysisStatus
+from app.services.progress import read_progress, task_statuses
 from app.schemas import (
     AnalysisCreated,
     AnalysisListResponse,
@@ -123,6 +126,10 @@ async def get_analysis(
     if not analysis:
         raise HTTPException(status_code=404, detail="Analysis not found")
 
+    progress_percent, progress_stage, progress_tasks = _get_progress(
+        analysis.id, analysis.status
+    )
+
     return AnalysisStatusSchema(
         id=analysis.id,
         sha256=analysis.sha256,
@@ -135,7 +142,65 @@ async def get_analysis(
         risk_score=analysis.risk_score,
         risk_level=analysis.risk_level,
         error_message=analysis.error_message,
+        progress_percent=progress_percent,
+        progress_stage=progress_stage,
+        progress_tasks=progress_tasks,
     )
+
+
+@router.post("/{analysis_id}/cancel")
+async def cancel_analysis(
+    analysis_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Request cancellation of a queued or running scan."""
+    analysis = await db.get(Analysis, analysis_id)
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+    if analysis.status == AnalysisStatus.CANCELLED:
+        return {"id": analysis.id, "status": "CANCELLED"}
+    if analysis.status in {AnalysisStatus.COMPLETED, AnalysisStatus.FAILED}:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot cancel an analysis that is {analysis.status.value.lower()}",
+        )
+
+    await asyncio.to_thread(job_service.request_cancel, analysis_id)
+    return {"id": analysis.id, "status": "CANCEL_REQUESTED"}
+
+
+def _get_progress(
+    analysis_id: str, status: AnalysisStatus
+) -> tuple[int, str, list[dict[str, str]]]:
+    """Read live scan progress written by the analyzer job."""
+    if status == AnalysisStatus.COMPLETED:
+        return 100, "Analysis complete", task_statuses(100)
+
+    progress = read_progress(settings.analysis_path / analysis_id) or {}
+    percent = max(0, min(100, int(progress.get("percent", 0))))
+    stage = str(progress.get("stage", "Waiting to start"))
+    if status == AnalysisStatus.FAILED:
+        stage = f"Failed during: {stage}"
+    elif status == AnalysisStatus.CANCELLED:
+        stage = "Cancelled by user"
+    elif status == AnalysisStatus.RUNNING and percent == 0:
+        percent, stage = 1, "Starting isolated analyzer"
+    tasks = progress.get("tasks") or task_statuses(percent)
+    if status == AnalysisStatus.CANCELLED:
+        tasks = [
+            {**task, "status": "cancelled"}
+            if task.get("status") == "in_progress"
+            else task
+            for task in tasks
+        ]
+    elif status == AnalysisStatus.FAILED:
+        tasks = [
+            {**task, "status": "failed"}
+            if task.get("status") == "in_progress"
+            else task
+            for task in tasks
+        ]
+    return percent, stage, tasks
 
 
 @router.get("/{analysis_id}/results", response_model=AnalysisResults)

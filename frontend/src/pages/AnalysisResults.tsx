@@ -55,6 +55,8 @@ export default function AnalysisResults() {
 
   const r = results.results
   const score = r?.score
+  const guidance = r?.user_guidance
+  const virustotal = r?.virustotal
 
   // Collect all contributions for "Why this score?"
   const allContributions: ScoreContribution[] = score
@@ -117,6 +119,124 @@ export default function AnalysisResults() {
           </div>
         )}
       </div>
+
+      {guidance && (
+        <div className="bg-sentinel-surface border border-sentinel-border rounded p-4 mb-6">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+            <h2 className="text-sm font-semibold text-sentinel-text">Should I install this APK?</h2>
+            <span className={`px-2 py-1 rounded border text-xs font-semibold ${
+              guidance.recommendation === 'AVOID'
+                ? 'text-red-400 border-red-500/40 bg-red-500/10'
+                : guidance.recommendation === 'USE CAUTION'
+                  ? 'text-yellow-400 border-yellow-500/40 bg-yellow-500/10'
+                  : 'text-green-400 border-green-500/40 bg-green-500/10'
+            }`}>
+              {guidance.recommendation}
+            </span>
+          </div>
+          <p className="text-xs leading-relaxed text-sentinel-text">{guidance.summary}</p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+            <div>
+              <h3 className="text-xs font-semibold text-green-400 mb-2">Positive signals</h3>
+              {guidance.pros.length ? (
+                <ul className="space-y-1 text-xs text-sentinel-muted">
+                  {guidance.pros.map((item, i) => <li key={i}>• {item}</li>)}
+                </ul>
+              ) : <p className="text-xs text-sentinel-muted">No positive signals recorded.</p>}
+            </div>
+            <div>
+              <h3 className="text-xs font-semibold text-orange-400 mb-2">Risks to consider</h3>
+              {guidance.cons.length ? (
+                <ul className="space-y-1 text-xs text-sentinel-muted">
+                  {guidance.cons.map((item, i) => <li key={i}>• {item}</li>)}
+                </ul>
+              ) : <p className="text-xs text-sentinel-muted">No specific concerns were identified by these checks.</p>}
+            </div>
+          </div>
+          <p className="mt-3 pt-3 border-t border-sentinel-border text-[10px] text-sentinel-muted">
+            {guidance.notice}
+          </p>
+        </div>
+      )}
+
+      {virustotal && (
+        <div className="bg-sentinel-surface border border-sentinel-border rounded p-4 mb-6">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+            <h2 className="text-xs font-semibold text-sentinel-muted uppercase tracking-wider">
+              VirusTotal hash report
+            </h2>
+            {virustotal.status === 'found' && virustotal.report_url && (
+              <a href={virustotal.report_url} target="_blank" rel="noopener noreferrer"
+                className="text-xs text-sentinel-accent hover:underline">
+                Open report ↗
+              </a>
+            )}
+          </div>
+          {virustotal.status === 'found' ? (
+            <>
+              <p className="text-xs text-sentinel-text mb-3">
+                Report for this exact SHA-256. Last analyzed: {virustotal.last_analysis_date
+                  ? new Date(virustotal.last_analysis_date).toLocaleString()
+                  : 'date unavailable'}.
+              </p>
+              <div className="flex flex-wrap gap-4 text-xs mb-3">
+                <span className="text-red-400">Malicious: {virustotal.stats?.malicious ?? 0}</span>
+                <span className="text-yellow-400">Suspicious: {virustotal.stats?.suspicious ?? 0}</span>
+                <span className="text-green-400">Undetected: {virustotal.stats?.undetected ?? 0}</span>
+                <span className="text-sentinel-muted">Engines: {virustotal.total_engines ?? 0}</span>
+              </div>
+              {(virustotal.threat_classification?.suggested_threat_label ||
+                virustotal.threat_classification?.popular_threat_category?.length ||
+                virustotal.threat_classification?.popular_threat_name?.length ||
+                virustotal.names?.length || virustotal.tags?.length) && (
+                <div className="mb-3 space-y-1 text-xs text-sentinel-muted">
+                  {virustotal.threat_classification?.suggested_threat_label && (
+                    <p>Threat label: {virustotal.threat_classification.suggested_threat_label}</p>
+                  )}
+                  {!!virustotal.threat_classification?.popular_threat_category?.length && (
+                    <p>Categories: {virustotal.threat_classification.popular_threat_category
+                      .map(item => `${item.value} (${item.count})`).join(', ')}</p>
+                  )}
+                  {!!virustotal.threat_classification?.popular_threat_name?.length && (
+                    <p>Threat families: {virustotal.threat_classification.popular_threat_name
+                      .map(item => `${item.value} (${item.count})`).join(', ')}</p>
+                  )}
+                  {!!virustotal.names?.length && <p>Known file names: {virustotal.names.join(', ')}</p>}
+                  {!!virustotal.tags?.length && <p>Tags: {virustotal.tags.join(', ')}</p>}
+                </div>
+              )}
+              {!!virustotal.detections?.length && (
+                <details className="text-xs">
+                  <summary className="cursor-pointer text-sentinel-accent">
+                    View flagged engines ({virustotal.detection_count})
+                  </summary>
+                  <div className="mt-2 max-h-48 overflow-y-auto space-y-1">
+                    {virustotal.detections.map((detection, i) => (
+                      <div key={`${detection.engine}-${i}`} className="flex justify-between gap-3 text-sentinel-muted">
+                        <span>{detection.engine}</span>
+                        <span className="text-right">{detection.result || detection.category}</span>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
+              <p className="mt-3 text-[10px] text-sentinel-muted">
+                This is VirusTotal’s saved report; it may be older than this APK Sentinel scan.
+              </p>
+            </>
+          ) : (
+            <p className="text-xs text-sentinel-muted">
+              {virustotal.status === 'not_found'
+                ? 'No saved VirusTotal report exists for this hash. APK Sentinel completed its own static scan.'
+                : virustotal.status === 'not_configured'
+                  ? 'VirusTotal lookup is not configured. APK Sentinel completed its own static scan.'
+                  : virustotal.status === 'quota_exceeded'
+                    ? 'VirusTotal quota was reached. APK Sentinel completed its own static scan.'
+                    : 'VirusTotal could not be reached. APK Sentinel completed its own static scan.'}
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Score + Breakdown */}
       {score && (

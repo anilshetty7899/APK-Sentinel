@@ -50,6 +50,11 @@ export default function FindingsTable({ contributions, title = 'Findings' }: Fin
                 <span className="text-xs text-sentinel-text truncate">
                   {item.explanation}
                 </span>
+                {item.occurrences != null && item.occurrences > 1 && (
+                  <span className="shrink-0 text-[10px] text-sentinel-muted">
+                    {item.occurrences} locations
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-2 shrink-0 ml-2">
                 <span className="text-xs font-mono text-sentinel-muted">

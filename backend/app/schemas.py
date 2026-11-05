@@ -34,6 +34,9 @@ class AnalysisStatus(BaseModel):
     risk_score: Optional[float] = None
     risk_level: Optional[str] = None
     error_message: Optional[str] = None
+    progress_percent: int = 0
+    progress_stage: str = "Queued"
+    progress_tasks: List[Dict[str, str]] = Field(default_factory=list)
 
 
 class AnalysisSummary(BaseModel):

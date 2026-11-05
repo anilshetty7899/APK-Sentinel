@@ -1,6 +1,6 @@
 /** TypeScript type definitions for APK Sentinel analysis data. */
 
-export type AnalysisStatusType = 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED';
+export type AnalysisStatusType = 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
 export type RiskLevel = 'LOW' | 'MODERATE' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 export type Severity = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO';
 
@@ -27,6 +27,15 @@ export interface AnalysisStatus {
   risk_score: number | null;
   risk_level: RiskLevel | null;
   error_message: string | null;
+  progress_percent: number;
+  progress_stage: string;
+  progress_tasks: ProgressTask[];
+}
+
+export interface ProgressTask {
+  id: string;
+  label: string;
+  status: 'pending' | 'in_progress' | 'completed' | 'cancelled' | 'failed';
 }
 
 export interface ScoreContribution {
@@ -34,6 +43,7 @@ export interface ScoreContribution {
   category: string;
   severity: string;
   points: number;
+  occurrences?: number;
   evidence: string;
   explanation: string;
 }
@@ -156,7 +166,38 @@ export interface AnalysisResults {
     obfuscation: ObfuscationInfo;
     certificate: CertificateInfo;
     score: ScoreBreakdown;
+    virustotal?: VirusTotalReputation;
+    user_guidance?: UserGuidance;
   } | null;
+}
+
+export interface VirusTotalReputation {
+  status: 'found' | 'not_found' | 'not_configured' | 'unavailable' | 'quota_exceeded';
+  source: string;
+  sha256?: string;
+  last_analysis_date?: string | null;
+  stats?: Record<string, number>;
+  detections?: { engine: string; category: string; result: string | null }[];
+  detection_count?: number;
+  total_engines?: number;
+  tags?: string[];
+  names?: string[];
+  threat_classification?: {
+    suggested_threat_label?: string;
+    popular_threat_category?: { value: string; count: number }[];
+    popular_threat_name?: { value: string; count: number }[];
+  };
+  report_url?: string;
+}
+
+export interface UserGuidance {
+  recommendation: 'AVOID' | 'USE CAUTION' | 'NO MAJOR INDICATORS FOUND';
+  summary: string;
+  pros: string[];
+  cons: string[];
+  static_score: number;
+  static_level: RiskLevel;
+  notice: string;
 }
 
 export interface AiReportFinding {

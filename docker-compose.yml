@@ -4,16 +4,24 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./backend:/app
-      - ./analysis_data:/app/analysis_data
+      - ./backend:/app:Z
+      # The Docker-launched analyzer is a separate container, so this data
+      # directory needs a shared SELinux label that both containers can read.
+      - ./analysis_data:/app/analysis_data:z
       - uploads:/app/uploads
       - /var/run/docker.sock:/var/run/docker.sock
+    # The host's SELinux label on docker.sock prevents the backend from
+    # connecting to it under the default container label. The backend needs
+    # this access to launch the isolated analyzer container.
+    security_opt:
+      - label=disable
     environment:
       - DATABASE_URL=sqlite+aiosqlite:///./sentinel.db
       - GROQ_API_KEY=${GROQ_API_KEY:-}
       - UPLOAD_DIR=/app/uploads
       - ANALYSIS_DIR=/app/analysis_data
       - ANALYSIS_HOST_DIR=${PWD}/analysis_data
+      - PYTHONPATH=/app
       - CORS_ORIGINS=["http://localhost:5173"]
     restart: unless-stopped
 
@@ -24,7 +32,7 @@ services:
     ports:
       - "5173:5173"
     volumes:
-      - ./frontend:/app
+      - ./frontend:/app:Z
       - /app/node_modules
     environment:
       - VITE_API_URL=http://localhost:8000

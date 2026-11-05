@@ -25,11 +25,16 @@ class Settings(BaseSettings):
     GROQ_API_KEY: str = ""
     GROQ_MODEL: str = "llama-3.3-70b-versatile"
 
+    # Optional VirusTotal hash-only reputation lookup. APK bytes are never
+    # submitted by this integration.
+    VIRUSTOTAL_API_KEY: str = ""
+    VIRUSTOTAL_LOOKUP_ENABLED: bool = False
+
     # Upload constraints
     MAX_APK_SIZE_MB: int = 100
 
     # Analysis
-    ANALYSIS_TIMEOUT_SECONDS: int = 300
+    ANALYSIS_TIMEOUT_SECONDS: int = 900
     UPLOAD_DIR: str = "./uploads"
     ANALYSIS_DIR: str = "./analysis_data"
     # Absolute path as seen by the Docker daemon (distinct from the backend

@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import shutil
+import threading
+import time
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import async_session_factory
 from app.models import Analysis, AnalysisStatus
+from app.services.progress import read_progress, write_progress as _write_progress
 from app.utils.logging import logger
 
 
@@ -36,6 +40,10 @@ class AnalysisJobService(ABC):
         ...
 
 
+class AnalysisCancelled(Exception):
+    """Raised when a user cancels an in-flight analysis."""
+
+
 class BackgroundTaskJobService(AnalysisJobService):
     """MVP implementation using asyncio tasks (in-process).
 
@@ -43,6 +51,51 @@ class BackgroundTaskJobService(AnalysisJobService):
     the FastAPI event loop. The Docker SDK is synchronous, so we use
     asyncio.to_thread for all blocking operations.
     """
+
+    def __init__(self) -> None:
+        self._state_lock = threading.Lock()
+        self._cancel_requested: set[str] = set()
+        self._active_containers: dict[str, str] = {}
+
+    def request_cancel(self, analysis_id: str) -> None:
+        """Request cancellation and stop the active analyzer container, if any."""
+        with self._state_lock:
+            self._cancel_requested.add(analysis_id)
+            container_id = self._active_containers.get(analysis_id)
+
+        if container_id:
+            client = None
+            try:
+                import docker
+
+                client = docker.from_env(timeout=15)
+                client.containers.get(container_id).kill()
+            except Exception as exc:
+                logger.warning(
+                    "Could not immediately stop analyzer container | analysis_id=%s | error=%s",
+                    analysis_id,
+                    str(exc),
+                )
+            finally:
+                if client:
+                    client.close()
+
+    def _is_cancel_requested(self, analysis_id: str) -> bool:
+        with self._state_lock:
+            return analysis_id in self._cancel_requested
+
+    def _clear_cancel_request(self, analysis_id: str) -> None:
+        with self._state_lock:
+            self._cancel_requested.discard(analysis_id)
+
+    def _register_container(self, analysis_id: str, container_id: str) -> bool:
+        with self._state_lock:
+            self._active_containers[analysis_id] = container_id
+            return analysis_id in self._cancel_requested
+
+    def _unregister_container(self, analysis_id: str) -> None:
+        with self._state_lock:
+            self._active_containers.pop(analysis_id, None)
 
     async def submit(self, analysis_id: str) -> None:
         """Fire-and-forget: launch analysis in a background asyncio task."""
@@ -58,25 +111,53 @@ class BackgroundTaskJobService(AnalysisJobService):
                     logger.error("Analysis not found | analysis_id=%s", analysis_id)
                     return
 
+                if self._is_cancel_requested(analysis_id):
+                    analysis.status = AnalysisStatus.CANCELLED
+                    analysis.error_message = "Scan cancelled by user"
+                    analysis.completed_at = datetime.now(timezone.utc)
+                    await session.commit()
+                    _write_progress(settings.analysis_path / analysis_id, 0, "Cancelled by user")
+                    self._clear_cancel_request(analysis_id)
+                    return
+
                 analysis.status = AnalysisStatus.RUNNING
                 analysis.started_at = datetime.now(timezone.utc)
                 await session.commit()
+                _write_progress(
+                    settings.analysis_path / analysis_id,
+                    0,
+                    "Checking VirusTotal for this SHA-256",
+                )
 
                 logger.info("Analysis started | analysis_id=%s", analysis_id)
 
-                # Run Docker analyzer in thread (blocking Docker SDK calls)
                 workspace = settings.analysis_path / analysis_id
+                from app.services.virustotal import build_user_guidance, lookup_hash
+
+                reputation = await lookup_hash(analysis.sha256)
+                if self._is_cancel_requested(analysis_id):
+                    raise AnalysisCancelled("Scan cancelled by user")
+
+                # Run Docker analyzer in thread (blocking Docker SDK calls)
+                _write_progress(workspace, 1, "Starting isolated analyzer")
                 results = await asyncio.to_thread(
                     self._run_docker_analyzer, analysis_id, workspace
                 )
 
                 if results is None:
                     raise RuntimeError("Analyzer container produced no results")
+                if self._is_cancel_requested(analysis_id):
+                    raise AnalysisCancelled("Scan cancelled by user")
 
                 # Run scoring engine on results
+                _write_progress(workspace, 97, "Calculating risk score")
                 from app.services.scoring import ScoringEngine
                 scoring_engine = ScoringEngine()
                 scored_results = scoring_engine.calculate_score(results)
+                scored_results["virustotal"] = reputation
+                scored_results["user_guidance"] = build_user_guidance(
+                    scored_results, reputation
+                )
 
                 # Store results
                 analysis.results_json = json.dumps(scored_results)
@@ -85,6 +166,7 @@ class BackgroundTaskJobService(AnalysisJobService):
 
                 # Generate AI report (non-blocking, graceful degradation)
                 try:
+                    _write_progress(workspace, 98, "Generating analysis report")
                     from app.services.groq_report import generate_report
                     ai_report = await generate_report(scored_results)
                     analysis.ai_report = json.dumps(ai_report) if ai_report else None
@@ -100,9 +182,13 @@ class BackgroundTaskJobService(AnalysisJobService):
                         "note": "Static analysis results and deterministic score are still available."
                     })
 
+                if self._is_cancel_requested(analysis_id):
+                    raise AnalysisCancelled("Scan cancelled by user")
                 analysis.status = AnalysisStatus.COMPLETED
                 analysis.completed_at = datetime.now(timezone.utc)
                 await session.commit()
+                _write_progress(workspace, 100, "Analysis complete")
+                self._clear_cancel_request(analysis_id)
 
                 logger.info(
                     "Analysis completed | analysis_id=%s | score=%.1f | level=%s",
@@ -112,17 +198,35 @@ class BackgroundTaskJobService(AnalysisJobService):
                 )
 
             except Exception as e:
-                logger.error(
-                    "Analysis failed | analysis_id=%s | error=%s",
-                    analysis_id, str(e),
-                )
+                if isinstance(e, AnalysisCancelled) or self._is_cancel_requested(analysis_id):
+                    logger.info("Analysis cancelled | analysis_id=%s", analysis_id)
+                else:
+                    logger.error(
+                        "Analysis failed | analysis_id=%s | error=%s",
+                        analysis_id, str(e),
+                    )
                 try:
                     analysis = await session.get(Analysis, analysis_id)
                     if analysis:
-                        analysis.status = AnalysisStatus.FAILED
-                        analysis.error_message = str(e)
+                        cancelled = (
+                            isinstance(e, AnalysisCancelled)
+                            or self._is_cancel_requested(analysis_id)
+                            or analysis.status == AnalysisStatus.CANCELLED
+                        )
+                        analysis.status = (
+                            AnalysisStatus.CANCELLED if cancelled else AnalysisStatus.FAILED
+                        )
+                        analysis.error_message = (
+                            "Scan cancelled by user" if cancelled else str(e)
+                        )
                         analysis.completed_at = datetime.now(timezone.utc)
                         await session.commit()
+                        _write_progress(
+                            settings.analysis_path / analysis_id,
+                            int((read_progress(settings.analysis_path / analysis_id) or {}).get("percent", 0)),
+                            "Cancelled by user" if cancelled else "Analysis failed",
+                        )
+                        self._clear_cancel_request(analysis_id)
                 except Exception:
                     logger.error("Failed to update analysis status to FAILED")
 
@@ -144,7 +248,10 @@ class BackgroundTaskJobService(AnalysisJobService):
         import docker
         from docker.errors import ContainerError, ImageNotFound, APIError
 
-        client = docker.from_env()
+        # Docker SDK's default HTTP read timeout is 60 seconds. A container
+        # wait request can exceed that for large APKs, so use short polling
+        # calls and a separate overall analysis deadline below.
+        client = docker.from_env(timeout=15)
 
         # Bind sources are resolved by the Docker daemon, which may run
         # outside the backend container. ANALYSIS_HOST_DIR points at the same
@@ -158,6 +265,7 @@ class BackgroundTaskJobService(AnalysisJobService):
 
         container = None
         try:
+            _write_progress(workspace, 2, "Preparing APK decode")
             container = client.containers.run(
                 image=settings.ANALYZER_IMAGE,
                 # The image ENTRYPOINT decodes the APK and runs the analyzer.
@@ -179,7 +287,14 @@ class BackgroundTaskJobService(AnalysisJobService):
                 cpu_quota=settings.ANALYZER_CPU_QUOTA,
                 privileged=False,
                 read_only=True,
-                environment={"HOME": "/tmp", "ANALYSIS_ID": analysis_id},
+                environment={
+                    "HOME": "/tmp",
+                    # JADX derives its config path from the JVM system
+                    # property, which otherwise points at /home/analyzer
+                    # (read-only in this container).
+                    "JAVA_TOOL_OPTIONS": "-Duser.home=/tmp",
+                    "ANALYSIS_ID": analysis_id,
+                },
                 tmpfs={
                     "/tmp": "size=256m",  # APKTool/JADX temp dirs
                 },
@@ -190,10 +305,32 @@ class BackgroundTaskJobService(AnalysisJobService):
                 detach=True,
                 remove=False,  # We remove manually after reading results
             )
+            if self._register_container(analysis_id, container.id):
+                container.kill()
 
-            # Wait for container with timeout
-            result = container.wait(timeout=settings.ANALYSIS_TIMEOUT_SECONDS)
-            exit_code = result.get("StatusCode", -1)
+            # Poll instead of using container.wait(): the Docker SDK wait
+            # request can time out at its HTTP layer before the analyzer's
+            # configured timeout, and it gives us no opportunity to publish
+            # live progress to the API.
+            deadline = time.monotonic() + settings.ANALYSIS_TIMEOUT_SECONDS
+            while True:
+                if self._is_cancel_requested(analysis_id):
+                    try:
+                        container.kill()
+                    except Exception:
+                        pass
+                    raise AnalysisCancelled("Scan cancelled by user")
+                container.reload()
+                if container.status == "exited":
+                    break
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"Analyzer exceeded {settings.ANALYSIS_TIMEOUT_SECONDS} seconds"
+                    )
+                _update_progress_from_logs(workspace)
+                time.sleep(1)
+
+            exit_code = container.attrs.get("State", {}).get("ExitCode", -1)
 
             # Capture logs for debugging
             logs = container.logs(stdout=True, stderr=True).decode("utf-8", errors="replace")
@@ -208,6 +345,7 @@ class BackgroundTaskJobService(AnalysisJobService):
                 )
 
             logger.info("Analyzer container completed | analysis_id=%s", analysis_id)
+            _write_progress(workspace, 96, "Collecting scan findings")
 
             # Read results
             results_file = output_dir / "findings" / "analysis_results.json"
@@ -228,12 +366,73 @@ class BackgroundTaskJobService(AnalysisJobService):
         except APIError as e:
             raise RuntimeError(f"Docker API error: {e}")
         finally:
+            self._unregister_container(analysis_id)
             # Clean up container
             if container:
                 try:
                     container.remove(force=True)
                 except Exception:
                     pass
+
+
+def _update_progress_from_logs(workspace: Path) -> None:
+    """Translate APKTool, JADX, and analyzer phase logs into user progress."""
+    output_dir = workspace / "output"
+    jadx_log = output_dir / "logs" / "jadx.log"
+    analysis_log = output_dir / "logs" / "analysis.log"
+    apktool_log = output_dir / "logs" / "apktool.log"
+
+    if analysis_log.exists():
+        try:
+            lines = analysis_log.read_text(errors="replace").splitlines()
+            latest = next(
+                (line for line in reversed(lines) if line.startswith("[Analysis]")),
+                "",
+            )
+        except OSError:
+            latest = ""
+        phases = [
+            ("Computing APK metadata", 66, "Reading APK metadata"),
+            ("Parsing AndroidManifest.xml", 68, "Reading XML manifest and resources"),
+            ("Analyzing permissions", 72, "Analyzing permissions"),
+            ("Analyzing components", 76, "Inspecting app components"),
+            ("Scanning for suspicious APIs", 80, "Scanning code and API usage"),
+            ("Extracting network indicators", 84, "Extracting network indicators"),
+            ("Detecting potential secrets", 88, "Checking for embedded secrets"),
+            ("Analyzing obfuscation", 91, "Analyzing obfuscation"),
+            ("Analyzing certificate", 94, "Inspecting signing certificate"),
+            ("Results written", 96, "Finishing scan results"),
+            ("Pipeline complete", 96, "Finishing scan results"),
+        ]
+        for marker, percent, stage in phases:
+            if marker in latest:
+                _write_progress(workspace, percent, stage)
+                return
+        _write_progress(workspace, 65, "Starting static analysis checks")
+        return
+
+    if jadx_log.exists():
+        try:
+            with jadx_log.open("rb") as log_file:
+                log_file.seek(0, 2)
+                log_size = log_file.tell()
+                log_file.seek(max(0, log_size - 65536))
+                log_text = log_file.read().decode("utf-8", errors="replace")
+            log_text = log_text.replace("\r", "\n")
+        except OSError:
+            log_text = ""
+        matches = re.findall(r"progress:\s*\d+\s+of\s+\d+\s+\((\d+)%\)", log_text)
+        if matches:
+            jadx_percent = min(100, int(matches[-1]))
+            overall_percent = 5 + round(jadx_percent * 0.60)
+            stage = f"Decompiling APK ({jadx_percent}% of code)"
+            _write_progress(workspace, overall_percent, stage)
+        else:
+            _write_progress(workspace, 5, "Decompiling APK")
+        return
+
+    if apktool_log.exists():
+        _write_progress(workspace, 3, "Decoding APK manifest and bytecode")
 
 
 # Singleton for the MVP

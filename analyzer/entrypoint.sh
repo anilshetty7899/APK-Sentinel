@@ -28,7 +28,7 @@ mkdir -p "${OUTPUT_DIR}/apktool" \
          /tmp/apktool-framework
 
 echo "[Sentinel Analyzer] Running APKTool..."
-apktool d "${APK_FILE}" -o "${OUTPUT_DIR}/apktool" -f --no-src \
+apktool d "${APK_FILE}" -o "${OUTPUT_DIR}/apktool" -f \
     --frame-path /tmp/apktool-framework 2>&1 | tee "${OUTPUT_DIR}/logs/apktool.log" || {
     echo "[WARNING] APKTool decoding failed or partially failed"
 }
@@ -39,7 +39,7 @@ jadx "${APK_FILE}" -d "${OUTPUT_DIR}/jadx" --no-res --show-bad-code 2>&1 | tee "
 }
 
 echo "[Sentinel Analyzer] Running analysis scripts..."
-python3 /opt/analyzer/scripts/run_analysis.py \
+python3 -u /opt/analyzer/scripts/run_analysis.py \
     --input "${INPUT_DIR}" \
     --output "${OUTPUT_DIR}" \
     2>&1 | tee "${OUTPUT_DIR}/logs/analysis.log"

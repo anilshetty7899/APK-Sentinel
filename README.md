@@ -108,9 +108,18 @@ npm run dev
 |----------|-------------|---------|
 | `DATABASE_URL` | SQLAlchemy database URL | `sqlite+aiosqlite:///./sentinel.db` |
 | `GROQ_API_KEY` | Groq API key (required for AI reports) | — |
+| `VIRUSTOTAL_LOOKUP_ENABLED` | Enable hash-only VirusTotal report lookup | `false` |
+| `VIRUSTOTAL_API_KEY` | VirusTotal Community API key; required when lookup is enabled | — |
 | `MAX_APK_SIZE_MB` | Maximum upload size in MB | `100` |
-| `ANALYSIS_TIMEOUT_SECONDS` | Hard timeout for analyzer container | `300` |
+| `ANALYSIS_TIMEOUT_SECONDS` | Hard timeout for analyzer container | `900` |
 | `CORS_ORIGINS` | Allowed CORS origins (JSON array) | `["http://localhost:5173"]` |
+
+VirusTotal integration is optional and performs a hash lookup only. Set
+`VIRUSTOTAL_LOOKUP_ENABLED=true` and provide `VIRUSTOTAL_API_KEY` in
+`backend/.env` to enable it. APK Sentinel does not upload APK bytes to
+VirusTotal; if no report exists or the lookup is unavailable, its own static
+scan still runs. A hash lookup is externally visible to VirusTotal, so enable
+it only for files you are permitted to query.
 
 ## API Endpoints
 
