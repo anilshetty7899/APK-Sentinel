@@ -62,7 +62,7 @@ export default function RiskGauge({ score, level }: RiskGaugeProps) {
           {level}
         </span>
         <p className="text-[10px] text-sentinel-muted mt-1.5">
-          Detected static risk · not a safety verdict
+          Static Security Risk Score
         </p>
       </div>
     </div>

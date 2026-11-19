@@ -1,3 +1,0 @@
---> Add .env in /backend folder
-
----> install Android Emulator for Dynamic Analysis
