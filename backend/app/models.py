@@ -18,7 +18,6 @@ class AnalysisStatus(str, enum.Enum):
     RUNNING = "RUNNING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
-    CANCELLED = "CANCELLED"
 
 
 class Analysis(Base):
@@ -51,6 +50,3 @@ class Analysis(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     results_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     ai_report: Mapped[str | None] = mapped_column(Text, nullable=True)
-    dynamic_requested: Mapped[bool] = mapped_column(default=False, nullable=False)
-    dynamic_status: Mapped[str] = mapped_column(String(24), default="NOT_REQUESTED", nullable=False)
-    dynamic_error: Mapped[str | None] = mapped_column(Text, nullable=True)

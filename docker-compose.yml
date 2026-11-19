@@ -4,38 +4,17 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./backend:/app:Z
-      # The Docker-launched analyzer is a separate container, so this data
-      # directory needs a shared SELinux label that both containers can read.
-      - ./analysis_data:/app/analysis_data:z
+      - ./backend:/app
+      - ./analysis_data:/app/analysis_data
       - uploads:/app/uploads
       - /var/run/docker.sock:/var/run/docker.sock
-    # The host's SELinux label on docker.sock prevents the backend from
-    # connecting to it under the default container label. The backend needs
-    # this access to launch the isolated analyzer container.
-    security_opt:
-      - label=disable
     environment:
       - DATABASE_URL=sqlite+aiosqlite:///./sentinel.db
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
       - UPLOAD_DIR=/app/uploads
       - ANALYSIS_DIR=/app/analysis_data
       - ANALYSIS_HOST_DIR=${PWD}/analysis_data
-      - PYTHONPATH=/app
       - CORS_ORIGINS=["http://localhost:5173"]
-    restart: unless-stopped
-
-  mobsf:
-    image: opensecurity/mobile-security-framework-mobsf:latest
-    env_file:
-      - ./backend/.env
-    volumes:
-      - mobsf_data:/home/mobsf/.MobSF
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    ports:
-      # Keep the web/API panel and device proxy private to this workstation.
-      - "127.0.0.1:8001:8000"
-      - "127.0.0.1:1337:1337"
     restart: unless-stopped
 
   frontend:
@@ -45,7 +24,7 @@ services:
     ports:
       - "5173:5173"
     volumes:
-      - ./frontend:/app:Z
+      - ./frontend:/app
       - /app/node_modules
     environment:
       - VITE_API_URL=http://localhost:8000
@@ -54,4 +33,3 @@ services:
 
 volumes:
   uploads:
-  mobsf_data:
