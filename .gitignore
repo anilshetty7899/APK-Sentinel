@@ -16,6 +16,7 @@ dist/
 
 # Environment
 .env
+*.env
 *.env.local
 
 # IDE
@@ -43,3 +44,5 @@ docker-compose.override.yml
 .pytest_cache/
 htmlcov/
 .coverage
+APKS/
+!APKS/.gitkeep

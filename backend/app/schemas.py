@@ -34,6 +34,12 @@ class AnalysisStatus(BaseModel):
     risk_score: Optional[float] = None
     risk_level: Optional[str] = None
     error_message: Optional[str] = None
+    progress_percent: int = 0
+    progress_stage: str = "Queued"
+    progress_tasks: List[Dict[str, str]] = Field(default_factory=list)
+    dynamic_requested: bool = False
+    dynamic_status: str = "NOT_REQUESTED"
+    dynamic_error: Optional[str] = None
 
 
 class AnalysisSummary(BaseModel):
@@ -75,6 +81,8 @@ class HealthResponse(BaseModel):
     """Health check response."""
     status: str = "ok"
     version: str = "0.1.0"
+    dynamic_analysis_available: bool = False
+    dynamic_analysis_configured: bool = False
 
 
 class ErrorResponse(BaseModel):

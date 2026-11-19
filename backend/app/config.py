@@ -16,6 +16,9 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        # The shared local env file may also include service-container-only
+        # settings such as MOBSF_API_KEY; ignore keys owned by that service.
+        extra="ignore",
     )
 
     # Database
@@ -23,13 +26,18 @@ class Settings(BaseSettings):
 
     # Groq AI
     GROQ_API_KEY: str = ""
-    GROQ_MODEL: str = "llama-3.3-70b-versatile"
+    GROQ_MODEL: str = "qwen/qwen3.8-27b"
+
+    # Optional VirusTotal hash-only reputation lookup. APK bytes are never
+    # submitted by this integration.
+    VIRUSTOTAL_API_KEY: str = ""
+    VIRUSTOTAL_LOOKUP_ENABLED: bool = False
 
     # Upload constraints
     MAX_APK_SIZE_MB: int = 100
 
     # Analysis
-    ANALYSIS_TIMEOUT_SECONDS: int = 300
+    ANALYSIS_TIMEOUT_SECONDS: int = 900
     UPLOAD_DIR: str = "./uploads"
     ANALYSIS_DIR: str = "./analysis_data"
     # Absolute path as seen by the Docker daemon (distinct from the backend
@@ -39,6 +47,17 @@ class Settings(BaseSettings):
     ANALYZER_MEM_LIMIT: str = "512m"
     ANALYZER_CPU_PERIOD: int = 100000
     ANALYZER_CPU_QUOTA: int = 50000  # 50% of one core
+
+    # Optional isolated Android runtime analysis service.
+    DYNAMIC_ANALYSIS_ENABLED: bool = False
+    DYNAMIC_ANALYSIS_BASE_URL: str = ""
+    DYNAMIC_ANALYSIS_API_KEY: str = ""
+    DYNAMIC_ANALYSIS_TIMEOUT: int = 900
+    DYNAMIC_ANALYSIS_MAX_RUNTIME: int = 120
+    DYNAMIC_ANALYSIS_MAX_CONCURRENT_JOBS: int = 1
+    DYNAMIC_ANALYSIS_DEVICE_ID: str = ""
+    DYNAMIC_SCORE_WEIGHT: float = 0.25
+    STATIC_SCORE_WEIGHT: float = 0.75
 
     # CORS
     CORS_ORIGINS: str = '["http://localhost:5173"]'

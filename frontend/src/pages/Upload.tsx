@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import api from '../api/client'
 
@@ -7,9 +7,24 @@ export default function Upload() {
   const [file, setFile] = useState<File | null>(null)
   const [dragging, setDragging] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [enableDynamic, setEnableDynamic] = useState(false)
+  const [dynamicAvailable, setDynamicAvailable] = useState(false)
+  const [dynamicConfigured, setDynamicConfigured] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const MAX_SIZE_MB = 100
+
+  useEffect(() => {
+    api.get('/health')
+      .then(res => {
+        setDynamicAvailable(Boolean(res.data?.dynamic_analysis_available))
+        setDynamicConfigured(Boolean(res.data?.dynamic_analysis_configured))
+      })
+      .catch(() => {
+        setDynamicAvailable(false)
+        setDynamicConfigured(false)
+      })
+  }, [])
 
   const validateFile = (f: File): string | null => {
     if (!f.name.toLowerCase().endsWith('.apk')) {
@@ -56,6 +71,7 @@ export default function Upload() {
 
     const formData = new FormData()
     formData.append('file', file)
+    formData.append('enable_dynamic_analysis', String(enableDynamic))
 
     try {
       const res = await api.post('/analyses', formData, {
@@ -106,6 +122,20 @@ export default function Upload() {
             }}
           />
         </div>
+
+        <label className={`mt-4 flex items-start gap-3 rounded border border-sentinel-border bg-sentinel-surface p-4 ${dynamicAvailable ? 'cursor-pointer' : 'cursor-not-allowed opacity-70'}`}>
+          <input type="checkbox" checked={enableDynamic} disabled={!dynamicAvailable} onChange={e => setEnableDynamic(e.target.checked)} className="mt-0.5 accent-blue-500" />
+          <span>
+            <span className="block text-sm text-sentinel-text">Enable Dynamic Analysis</span>
+            <span className="mt-1 block text-xs text-sentinel-muted">
+              {dynamicAvailable
+                ? 'Runs the app in a configured Android runtime. An available isolated device is required.'
+                : dynamicConfigured
+                  ? 'The runtime service is configured. Dynamic scans remain disabled until an Android emulator or device is connected.'
+                  : 'Dynamic runtime service is not configured. Static analysis remains available.'}
+            </span>
+          </span>
+        </label>
 
         {/* Error */}
         {error && (

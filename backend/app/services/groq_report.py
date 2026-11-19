@@ -28,8 +28,11 @@ CRITICAL RULES:
    - INTERPRETATION: Your professional analysis of what it could mean
    - POTENTIAL RISK: What could happen if the finding is exploited
 3. You MUST NEVER state that an APK is definitively malware based solely on static indicators.
-4. You MUST acknowledge the limitations of static analysis.
+4. You MUST acknowledge static analysis limitations and any runtime coverage limitations supplied with the findings.
 5. DO NOT include any actual secret values in your report — use only the redacted versions provided.
+6. Runtime findings must be described only when present in the supplied evidence; never infer unobserved behavior.
+7. Preserve the supplied analysis coverage and testing limitations. A missing or failed runtime scan is not a zero-risk result.
+8. Never expose internal service names, credentials, tokens, or captured personal data.
 
 Generate a JSON report with these sections:
 {
@@ -87,6 +90,10 @@ async def generate_report(
         "obfuscation": analysis_results.get("obfuscation", {}),
         "certificate": analysis_results.get("certificate", {}),
         "score": analysis_results.get("score", {}),
+        "dynamic_findings": analysis_results.get("dynamic_findings", []),
+        "dynamic_score": analysis_results.get("dynamic_score"),
+        "combined_score": analysis_results.get("combined_score"),
+        "analysis_coverage": analysis_results.get("analysis_coverage", {"static": "COMPLETED", "dynamic": "NOT_REQUESTED", "overall": "STATIC_ONLY"}),
     }
 
     client = Groq(api_key=settings.GROQ_API_KEY)
@@ -98,7 +105,7 @@ async def generate_report(
             {
                 "role": "user",
                 "content": (
-                    "Analyze the following APK static analysis findings and generate "
+                    "Analyze the following APK security findings and generate "
                     "a professional security assessment report:\n\n"
                     f"```json\n{json.dumps(payload, indent=2)}\n```"
                 ),

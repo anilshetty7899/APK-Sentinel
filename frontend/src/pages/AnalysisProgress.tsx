@@ -9,6 +9,20 @@ export default function AnalysisProgress() {
   const navigate = useNavigate()
   const [analysis, setAnalysis] = useState<AnalysisStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [cancelError, setCancelError] = useState<string | null>(null)
+  const [cancelRequested, setCancelRequested] = useState(false)
+
+  const cancelScan = async () => {
+    if (!id) return
+    setCancelError(null)
+    setCancelRequested(true)
+    try {
+      await api.post(`/analyses/${id}/cancel`)
+    } catch (e: any) {
+      setCancelRequested(false)
+      setCancelError(e?.response?.data?.detail || 'Could not cancel this scan')
+    }
+  }
 
   useEffect(() => {
     if (!id) return
@@ -22,7 +36,7 @@ export default function AnalysisProgress() {
           navigate(`/analysis/${id}`, { replace: true })
           return
         }
-        if (res.data.status === 'FAILED') {
+        if (res.data.status === 'FAILED' || res.data.status === 'CANCELLED') {
           return // Stay on page to show error
         }
       } catch {
@@ -76,6 +90,67 @@ export default function AnalysisProgress() {
           <div className="text-xs text-sentinel-muted font-mono">
             SHA-256: {analysis.sha256}
           </div>
+          {(analysis.status === 'QUEUED' || analysis.status === 'RUNNING') && !cancelRequested && (
+            <button
+              onClick={cancelScan}
+              className="mt-3 px-3 py-1.5 rounded border border-red-500/40 text-xs text-red-400 hover:bg-red-500/10"
+            >
+              Cancel scan
+            </button>
+          )}
+          {cancelRequested && analysis.status !== 'CANCELLED' && (
+            <p className="mt-3 text-xs text-sentinel-muted">Cancelling scan…</p>
+          )}
+          {cancelError && <p className="mt-2 text-xs text-red-400">{cancelError}</p>}
+        </div>
+
+        {/* Live scan percentage */}
+        <div className="bg-sentinel-surface border border-sentinel-border rounded p-4 mb-6">
+          <div className="flex items-center justify-between gap-3 mb-2">
+            <span className="text-sm text-sentinel-text font-medium">Estimated scan progress</span>
+            <span className="text-sm font-mono text-sentinel-accent">
+              {analysis.progress_percent}%
+            </span>
+          </div>
+          <div
+            role="progressbar"
+            aria-label="APK scan progress"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={analysis.progress_percent}
+            className="h-2 overflow-hidden rounded bg-sentinel-border"
+          >
+            <div
+              className={`h-full rounded transition-all duration-500 ${analysis.status === 'FAILED' ? 'bg-red-500' : analysis.status === 'CANCELLED' ? 'bg-gray-500' : 'bg-sentinel-accent'}`}
+              style={{ width: `${Math.max(0, Math.min(100, analysis.progress_percent))}%` }}
+            />
+          </div>
+          <div className="mt-2 text-xs text-sentinel-muted">{analysis.progress_stage}</div>
+          <div className="mt-4 space-y-2 border-t border-sentinel-border pt-3">
+            {(analysis.progress_tasks || []).map(task => (
+              <div key={task.id} className="flex items-center gap-2 text-xs">
+                <span className={
+                  task.status === 'completed'
+                    ? 'text-green-400'
+                    : task.status === 'in_progress'
+                        ? 'text-sentinel-accent animate-pulse'
+                        : task.status === 'failed'
+                          ? 'text-red-400'
+                          : task.status === 'cancelled'
+                            ? 'text-yellow-400'
+                            : 'text-sentinel-muted'
+                }>
+                  {task.status === 'completed' ? '✓' : task.status === 'in_progress' ? '●' : task.status === 'failed' ? '✕' : task.status === 'cancelled' ? '■' : '○'}
+                </span>
+                <span className={task.status === 'pending' ? 'text-sentinel-muted' : 'text-sentinel-text'}>
+                  {task.label}
+                </span>
+                {(task.status === 'in_progress' || task.status === 'failed' || task.status === 'cancelled') && (
+                  <span className="text-sentinel-muted">{task.status.replace('_', ' ')}</span>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
 
         {/* Progress stages */}
@@ -83,7 +158,7 @@ export default function AnalysisProgress() {
           {stages.map((stage, idx) => {
             const isActive = idx === currentIdx
             const isDone = idx < currentIdx || analysis.status === 'COMPLETED'
-            const isFailed = analysis.status === 'FAILED' && idx === 1
+            const isFailed = (analysis.status === 'FAILED' || analysis.status === 'CANCELLED') && idx === 1
 
             return (
               <div key={stage.key} className="flex items-start gap-3 relative">
@@ -135,7 +210,7 @@ export default function AnalysisProgress() {
         </div>
 
         {/* Error message */}
-        {analysis.status === 'FAILED' && analysis.error_message && (
+        {(analysis.status === 'FAILED' || analysis.status === 'CANCELLED') && analysis.error_message && (
           <div className="mt-2 px-3 py-2 bg-red-500/10 border border-red-500/30 rounded text-xs text-red-400">
             {analysis.error_message}
           </div>

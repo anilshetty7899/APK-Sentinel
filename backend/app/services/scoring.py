@@ -3,11 +3,8 @@
 The LLM NEVER calculates or overrides scores. This engine is the single
 source of truth for the Static Security Risk Score.
 
-Scoring weights:
-  - Permission Risk:       25%
-  - Code/API Risk:         35%
-  - Component Exposure:    20%
-  - Indicators/Metadata:   20%
+Scoring weights prioritize code and permission evidence. The result estimates
+detected static risk; it is not a safety verdict or malware classification.
 
 Risk levels (project-defined):
   - LOW:      0–20
@@ -50,10 +47,10 @@ class ScoringEngine:
 
     # Category weights (must sum to 1.0)
     WEIGHTS = {
-        "permissions": 0.25,
-        "code_api": 0.35,
-        "components": 0.20,
-        "indicators": 0.20,
+        "permissions": 0.30,
+        "code_api": 0.40,
+        "components": 0.15,
+        "indicators": 0.15,
     }
 
     # Maximum raw points per category before normalization
@@ -140,10 +137,10 @@ class ScoringEngine:
     # ── Permission scoring ────────────────────────────────────────────
 
     PERMISSION_POINTS = {
-        "HIGH_RISK": 10,
-        "DANGEROUS": 6,
-        "SPECIAL": 8,
-        "NORMAL": 1,
+        "HIGH_RISK": 18,
+        "DANGEROUS": 10,
+        "SPECIAL": 14,
+        "NORMAL": 0,
     }
 
     def _score_permissions(
@@ -177,23 +174,62 @@ class ScoringEngine:
     # ── Code/API scoring ──────────────────────────────────────────────
 
     API_SEVERITY_POINTS = {
-        "CRITICAL": 12,
-        "HIGH": 8,
-        "MEDIUM": 5,
+        "CRITICAL": 25,
+        "HIGH": 16,
+        "MEDIUM": 8,
         "LOW": 2,
-        "INFO": 1,
+        "INFO": 0,
+    }
+
+    API_BEHAVIOR_POINTS = {
+        "SMS": 10, "TELEPHONY": 6, "AUDIO": 10, "CAMERA": 6,
+        "LOCATION": 6, "DYNAMIC_CODE_LOADING": 12,
+        "PROCESS_EXECUTION": 12, "REFLECTION": 4,
     }
 
     def _score_apis(self, apis: List[Dict], out: List[Dict]) -> None:
+        # JADX and APKTool can report the same API many times across call
+        # sites, wrappers, and bundled libraries. Keep occurrence evidence,
+        # but score each distinct API once so repetition cannot dominate the
+        # total by itself.
+        grouped: Dict[tuple[str, str], Dict[str, Any]] = {}
+        severity_rank = {"INFO": 0, "LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
         for api in apis:
+            category = api.get("category", "UNKNOWN")
+            matched_api = api.get("matched_api", "unknown")
+            key = (category, matched_api)
+            group = grouped.setdefault(key, {
+                "category": category,
+                "matched_api": matched_api,
+                "severity": api.get("severity", "MEDIUM"),
+                "explanation": api.get("explanation", ""),
+                "locations": [],
+            })
             severity = api.get("severity", "MEDIUM")
+            if severity_rank.get(severity, 2) > severity_rank.get(group["severity"], 2):
+                group["severity"] = severity
+            location = f"{api.get('file', 'unknown')}:{api.get('line', '?')}"
+            if location not in group["locations"]:
+                group["locations"].append(location)
+
+        seen_behaviors = set()
+        for api in grouped.values():
+            severity = api.get("severity", "MEDIUM")
+            category = api.get("category", "UNKNOWN")
             points = self.API_SEVERITY_POINTS.get(severity, 3)
+            if category not in seen_behaviors:
+                points += self.API_BEHAVIOR_POINTS.get(category, 0)
+                seen_behaviors.add(category)
             out.append({
-                "rule_id": f"API_{api.get('category', 'UNKNOWN')}_{api.get('matched_api', 'unknown')}",
+                "rule_id": f"API_{category}_{api.get('matched_api', 'unknown')}",
                 "category": "code_api",
                 "severity": severity,
                 "points": points,
-                "evidence": f"{api.get('matched_api', '')} in {api.get('file', 'unknown')}",
+                "occurrences": len(api["locations"]),
+                "evidence": (
+                    f"{api.get('matched_api', '')} found in {len(api['locations'])} locations: "
+                    + ", ".join(api["locations"][:3])
+                ),
                 "explanation": api.get("explanation", f"Security-sensitive API usage: {api.get('matched_api', '')}"),
             })
 
@@ -206,7 +242,7 @@ class ScoringEngine:
                     "rule_id": f"COMP_EXPORTED_UNPROTECTED_{comp.get('type', 'unknown')}",
                     "category": "components",
                     "severity": "HIGH",
-                    "points": 8,
+                    "points": 16,
                     "evidence": f"{comp.get('type', 'component')}: {comp.get('name', 'unknown')}",
                     "explanation": f"Exported {comp.get('type', 'component')} without permission protection",
                 })
@@ -215,7 +251,7 @@ class ScoringEngine:
                     "rule_id": f"COMP_EXPORTED_{comp.get('type', 'unknown')}",
                     "category": "components",
                     "severity": "MEDIUM",
-                    "points": 3,
+                    "points": 5,
                     "evidence": f"{comp.get('type', 'component')}: {comp.get('name', 'unknown')}",
                     "explanation": f"Exported {comp.get('type', 'component')} (permission protected)",
                 })
@@ -235,20 +271,20 @@ class ScoringEngine:
                 "rule_id": f"SECRET_{secret.get('type', 'unknown')}",
                 "category": "indicators",
                 "severity": "HIGH",
-                "points": 10,
+                "points": 12,
                 "evidence": secret.get("redacted_evidence", "[REDACTED]"),
                 "explanation": f"Potential hardcoded secret: {secret.get('type', 'unknown')}",
             })
 
         # Network indicators scored mildly (presence alone isn't malicious)
-        if len(network) > 20:
+        if network:
             out.append({
-                "rule_id": "NET_HIGH_COUNT",
+                "rule_id": "NET_INDICATORS_PRESENT",
                 "category": "indicators",
-                "severity": "MEDIUM",
-                "points": 5,
+                "severity": "LOW",
+                "points": min(2 + len(network), 12),
                 "evidence": f"{len(network)} network indicators found",
-                "explanation": "High number of embedded network indicators",
+                "explanation": "Embedded network destinations are present; their reputation and runtime use are not verified",
             })
 
         # Obfuscation score contributes to indicators
@@ -258,7 +294,7 @@ class ScoringEngine:
                 "rule_id": "OBF_HIGH",
                 "category": "indicators",
                 "severity": "MEDIUM",
-                "points": 6,
+                "points": 12,
                 "evidence": f"Obfuscation score: {obf_score}/100",
                 "explanation": "High obfuscation level detected (note: legitimate apps also use R8/ProGuard)",
             })

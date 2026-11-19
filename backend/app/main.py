@@ -50,4 +50,10 @@ app.include_router(analyses_router)
 @app.get("/api/health", response_model=HealthResponse, tags=["health"])
 async def health_check():
     """Health check endpoint."""
-    return HealthResponse(status="ok", version="0.1.0")
+    dynamic_configured = bool(settings.DYNAMIC_ANALYSIS_BASE_URL and settings.DYNAMIC_ANALYSIS_API_KEY)
+    dynamic_available = bool(settings.DYNAMIC_ANALYSIS_ENABLED and dynamic_configured)
+    return HealthResponse(
+        status="ok", version="0.1.0",
+        dynamic_analysis_available=dynamic_available,
+        dynamic_analysis_configured=dynamic_configured,
+    )
